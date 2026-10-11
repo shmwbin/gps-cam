@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>SHM-GPS-Cam</title>
+    <!-- PWA Meta Tags -->
+    <link rel="manifest" href="manifest.json?v=2">
+    <meta name="theme-color" content="#000000">
+    <link rel="apple-touch-icon" href="https://res.cloudinary.com/ewu5hckc/image/upload/v1791730364/gcam.png">
+    
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        /* 100dvh ব্যবহার করা হয়েছে যাতে মোবাইলে স্ক্রিন না কাটে */
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #000; color: #fff; overflow: hidden; height: 100dvh; width: 100vw; display: flex; flex-direction: column; }
+        
+        /* PWA Install Banner */
+        #installBanner { position: fixed; top: 0; left: 0; width: 100%; background: #1f1f1f; padding: 12px 15px; display: none; justify-content: space-between; align-items: center; z-index: 1000; box-shadow: 0 4px 10px rgba(0,0,0,0.5); border-bottom: 1px solid #333; }
+        .install-info { display: flex; align-items: center; gap: 12px; }
+        .install-info img { width: 40px; height: 40px; border-radius: 8px; object-fit: cover; }
+        .install-text { display: flex; flex-direction: column; }
+        .install-text strong { font-size: 15px; color: #fff; }
+        .install-text span { font-size: 12px; color: #aaa; }
+        .install-actions { display: flex; gap: 10px; align-items: center; }
+        .btn-install-app { background: #4ade80; color: #000; border: none; padding: 8px 16px; font-weight: bold; border-radius: 6px; cursor: pointer; }
+        .btn-close-banner { background: transparent; color: #fff; border: none; font-size: 18px; cursor: pointer; padding: 5px; }
+
+        /* Camera and Preview Area */
+        .view-area { flex: 1; position: relative; overflow: hidden; display: flex; justify-content: center; align-items: center; background: #111; }
+        video { width: 100%; height: 100%; object-fit: cover; transition: transform 0.3s ease; }
+        .mirror { transform: scaleX(-1); } 
+        canvas { width: 100%; height: 100%; object-fit: contain; display: none; }
+
+        /* Overlay */
+        .overlay { position: absolute; top: 15px; left: 15px; right: 15px; background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px); padding: 12px; border-radius: 10px; font-size: 12px; font-family: monospace; line-height: 1.5; border: 1px solid rgba(255,255,255,0.1); z-index: 10; pointer-events: none; }
+        
+        /* Bottom Black Banner for Controls */
+        .bottom-bar { height: 110px; min-height: 110px; background: #000; display: flex; justify-content: space-evenly; align-items: center; padding-bottom: env(safe-area-inset-bottom); border-top: 1px solid #222; }
+        
+        button { border: none; border-radius: 50px; cursor: pointer; font-weight: bold; font-size: 15px; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
+        button:active { transform: scale(0.95); }
+
+        .btn-capture { width: 75px; height: 75px; border-radius: 50%; background-color: #fff; border: 5px solid #ddd; outline: 3px solid #000; }
+        .btn-switch { padding: 12px 20px; background: #333; color: white; }
+        .btn-action { padding: 14px 28px; background-color: #0078A8; color: white; }
+        .btn-retake { padding: 14px 28px; background-color: #ea4335; color: white; }
+    </style>
+</head>
+<body>
+
+    <!-- Install App Banner -->
+    <div id="installBanner">
+        <div class="install-info">
+            <!-- Cloudinary Image Link -->
+            <img src="https://res.cloudinary.com/ewu5hckc/image/upload/v1791730364/gcam.png" alt="App Icon" onerror="this.onerror=null;this.src='https://img.icons8.com/color/96/camera--v1.png';">
+            <div class="install-text">
+                <strong>SHM-GPS-Cam</strong>
+                <span>Install for offline use</span>
+            </div>
+        </div>
+        <div class="install-actions">
+            <button id="installBtn" class="btn-install-app">Install</button>
+            <button id="closeBanner" class="btn-close-banner">✖</button>
+        </div>
+    </div>
+
+    <!-- Camera / Preview Area -->
+    <div class="view-area">
+        <div id="locationOverlay" class="overlay">📍 জিপিএস ও ক্যামেরা চালু হচ্ছে...</div>
+        <video id="video" autoplay playsinline></video>
+        <canvas id="canvas"></canvas>
+    </div>
+
+    <!-- Bottom Controls Area (Black Banner) -->
+    <div class="bottom-bar" id="cameraControls">
+        <button class="btn-switch" onclick="toggleCamera()">🔄 Flip</button>
+        <button class="btn-capture" onclick="takePhoto()"></button>
+        <div style="width: 80px;"></div> <!-- Spacer -->
+    </div>
+
+    <div class="bottom-bar" id="previewControls" style="display: none;">
+        <button class="btn-retake" onclick="retakePhoto()">✖ Retake</button>
+        <button class="btn-action" onclick="downloadPhoto()">⬇️ Save</button>
+    </div>
+
+    <script>
+        // PWA Install Prompt Logic
+        let deferredPrompt;
+        const installBanner = document.getElementById('installBanner');
+        const installBtn = document.getElementById('installBtn');
+        const closeBanner = document.getElementById('closeBanner');
+
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            installBanner.style.display = 'flex';
+        });
+
+        installBtn.addEventListener('click', async () => {
+            installBanner.style.display = 'none';
+            if (deferredPrompt) {
+                deferredPrompt.prompt();
+                const { outcome } = await deferredPrompt.userChoice;
+                console.log(`User response to the install prompt: ${outcome}`);
+                deferredPrompt = null;
+            }
+        });
+
+        closeBanner.addEventListener('click', () => {
+            installBanner.style.display = 'none';
+        });
+
+        // PWA Service Worker Registration
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('sw.js').then(() => {
+                console.log("Service Worker Registered");
+            });
+        }
+
+        // Camera and Logic Variables
+        const video = document.getElementById('video');
+        const overlay = document.getElementById('locationOverlay');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const cameraControls = document.getElementById('cameraControls');
+        const previewControls = document.getElementById('previewControls');
+        
+        let currentLat = "Searching...";
+        let currentLng = "Searching...";
+        let placeName = "Searching location...";
+        let useFrontCamera = false; 
+        let currentStream = null;
+
+        // Start Camera
+        async function startCamera() {
+            if (currentStream) {
+                currentStream.getTracks().forEach(track => track.stop());
+            }
+
+            const constraints = {
+                video: {
+                    facingMode: useFrontCamera ? "user" : "environment",
+                    width: { ideal: 1920, max: 3840 },
+                    height: { ideal: 1080, max: 2160 }
+                }
+            };
+
+            if (useFrontCamera) video.classList.add('mirror');
+            else video.classList.remove('mirror');
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                currentStream = stream;
+                video.srcObject = stream;
+            } catch (err) {
+                overlay.innerHTML = "ক্যামেরা পারমিশন দিন!";
+            }
+        }
+
+        function toggleCamera() {
+            useFrontCamera = !useFrontCamera;
+            startCamera();
+        }
+
+        startCamera();
+
+        // GPS Tracking
+        if ("geolocation" in navigator) {
+            navigator.geolocation.watchPosition(
+                async position => {
+                    currentLat = position.coords.latitude.toFixed(6);
+                    currentLng = position.coords.longitude.toFixed(6);
+                    updateOverlay(); 
+
+                    try {
+                        const res = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${currentLat}&longitude=${currentLng}&localityLanguage=en`);
+                        const data = await res.json();
+                        placeName = (data.locality || data.city || data.principalSubdivision || "Unknown Area") + ", " + (data.countryName || "");
+                        updateOverlay();
+                    } catch (e) {
+                        placeName = "Location name not found";
+                    }
+                },
+                error => { overlay.innerHTML = "📍 জিপিএস সিগন্যাল পাওয়া যাচ্ছে না..."; },
+                { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+            );
+        }
+
+        function updateOverlay() {
+            overlay.innerHTML = `📍 ${placeName}<br>🌍 Lat: ${currentLat}, Lng: ${currentLng}`;
+        }
+
+        // Capture Photo
+        function takePhoto() {
+            if(video.videoWidth === 0) return;
+            
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            
+            if (useFrontCamera) {
+                ctx.translate(canvas.width, 0);
+                ctx.scale(-1, 1);
+            }
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            if (useFrontCamera) {
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+            }
+            
+            const w = canvas.width;
+            const h = canvas.height;
+            const pad = w * 0.02;
+            const titleFontSize = Math.max(24, w * 0.035);
+            const textFontSize = Math.max(16, w * 0.022);
+            const boxHeight = titleFontSize + (textFontSize * 4) + (pad * 2.5);
+            
+            ctx.fillStyle = "rgba(0, 0, 0, 0.5)"; 
+            ctx.fillRect(0, h - boxHeight, w, boxHeight);
+            
+            let startY = h - boxHeight + pad + titleFontSize;
+            
+            ctx.fillStyle = "#4ade80"; 
+            ctx.font = `bold ${titleFontSize}px sans-serif`; 
+            ctx.fillText(`📷 SHM-GPS-Cam`, pad, startY);
+            
+            startY += textFontSize * 1.5;
+            ctx.fillStyle = "#ffffff"; 
+            ctx.font = `${textFontSize}px sans-serif`; 
+            
+            const timeNow = new Date().toLocaleString('en-US');
+            ctx.fillText(`📍 Place : ${placeName}`, pad, startY);
+            ctx.fillText(`🌍 GPS   : Lat ${currentLat}, Lng ${currentLng}`, pad, startY + textFontSize * 1.5);
+            ctx.fillText(`🕒 Time  : ${timeNow}`, pad, startY + textFontSize * 3);
+            
+            // Switch UI
+            video.style.display = "none";
+            canvas.style.display = "block";
+            cameraControls.style.display = "none";
+            previewControls.style.display = "flex";
+            overlay.style.display = "none";
+        }
+
+        function retakePhoto() {
+            canvas.style.display = "none";
+            video.style.display = "block";
+            previewControls.style.display = "none";
+            cameraControls.style.display = "flex";
+            overlay.style.display = "block";
+        }
+
+        function downloadPhoto() {
+            const link = document.createElement('a');
+            link.download = `SHM-GPS-Cam_${new Date().getTime()}.jpg`;
+            link.href = canvas.toDataURL('image/jpeg', 1.0); 
+            link.click();
+        }
+    </script>
+</body>
+</html>
